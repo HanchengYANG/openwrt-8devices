@@ -198,25 +198,13 @@ else
   _LINUX_SRC=$(CONFIG_KERNEL_GIT_CLONE_URI)
 endif
 
-
-ifneq ($(call qstrip,$(_LINUX_SRC)),)
-# --reference option doesn't work on git trees synced with "repo", so instead
-# we're manually using clone & fetch to speed up sync time
-  define FastCloneKernel
-	git clone $(_LINUX_SRC) $(2) || \
-	(rm -rf $(2) && \
-	git clone $(_LINUX_SRC) $(2))
-	(cd $(2); git remote add src $(1); git fetch src)
-  endef
-else
-  define FastCloneKernel
+define FastCloneKernel
 	GIT_NAME=$$$$(echo $(1) | sed -e 's:.*//[^/]*.::g'); \
 	git clone $(1) $(2) || \
 	([ -n "${CONFIG_GIT_MIRROR}" ] && \
 	rm -rf $(2) && \
 	git clone $(CONFIG_GIT_MIRROR)$$$$GIT_NAME $(2))
-  endef
-endif
+endef
 
 getLocalBackport ?= $(shell wget $(SERVER_PATH)/$(PKG_SOURCE) -P $(TOPDIR)/dl/);
 ifeq ($(FORCED_BACKPORTS),false)
@@ -258,7 +246,7 @@ define Download/backports
   FILE:=$(PKG_SOURCE)
   SUBDIR:=$(PKG_SUBDIR)
 endef
-$(if $(wildcard $(DL_DIR)/$(PKG_SOURCE)),,$(eval $(call DownloadBackports,backports)))
+$(eval $(call DownloadBackports,backports))
 
 define KernelPackage/ath/config
   if PACKAGE_kmod-ath
