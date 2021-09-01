@@ -4,15 +4,15 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=mac80211
 
-PKG_BACKPORTS_VERSION:=79400d9e7c46
+PKG_BACKPORTS_VERSION:=3a9d70a32ea5
 PKG_BACKPORTS_SOURCE_URL:=git://git.kernel.org/pub/scm/linux/kernel/git/backports/backports.git
 PKG_BACKPORTS_BRANCH:=master
 
-PKG_KERNEL_VERSION:=931c337125
+PKG_KERNEL_VERSION:=b157d2276
 PKG_KERNEL_SOURCE_URL:=https://source.codeaurora.org/quic/qsdk/kvalo/ath.git
 PKG_KERNEL_BRANCH:=ath-qca
 
-PKG_VERSION:=20200902_001
+PKG_VERSION:=20210222_001
 PKG_SOURCE:=backports-$(PKG_VERSION)-$(LINUX_VERSION)-$(PKG_KERNEL_VERSION).tar.bz2
 PKG_SUBDIR:=backports-$(PKG_VERSION)-$(LINUX_VERSION)-$(PKG_KERNEL_VERSION)
 PKG_RELEASE:=1
@@ -44,7 +44,7 @@ endef
 define KernelPackage/cfg80211
   $(call KernelPackage/mac80211/Default)
   TITLE:=cfg80211 - wireless configuration API
-  DEPENDS+= +iw +LINUX_4_4:kmod-crypto-core +kmod-crypto-manager +wireless-regdb
+  DEPENDS+= +iw +kmod-crypto-core +kmod-crypto-manager +wireless-regdb
   FILES:= \
 	$(PKG_BUILD_DIR)/compat/compat.ko \
 	$(PKG_BUILD_DIR)/net/wireless/cfg80211.ko
@@ -68,8 +68,8 @@ endef
 define KernelPackage/mac80211
   $(call KernelPackage/mac80211/Default)
   TITLE:=Linux 802.11 Wireless Networking Stack
-  DEPENDS+= @TARGET_ipq50xx||TARGET_ipq807x||TARGET_ipq806x||TARGET_ipq||TARGET_ar71xx \
-	+LINUX_4_4:kmod-crypto-arc4 +LINUX_4_4:kmod-crypto-aes +kmod-cfg80211 +hostapd-common
+  DEPENDS+= @TARGET_ipq806x||TARGET_ipq||TARGET_ar71xx \
+	+kmod-crypto-arc4 +kmod-crypto-aes +kmod-cfg80211 +hostapd-common +kmod-qca-nss-drv-wifi-meshmgr
   PKG_BUILD_DEPENDS+= PACKAGE_kmod-qca-nss-drv:kmod-qca-nss-drv
   KCONFIG:=\
 	CONFIG_AVERAGE=y
@@ -184,7 +184,7 @@ define Download/linux-firmware
   PROTO:=$(PKG_LINUX_FIRMWARE_PROTO)
   VERSION:=$(PKG_LINUX_FIRMWARE_VERSION)
   SUBDIR:=$(PKG_LINUX_FIRMWARE_SUBDIR)
-  MIRROR_MD5SUM:=$(PKG_LINUX_FIRMWARE_MIRROR_MD5SUM)
+  MIRROR_MD5SUM:=skip
 endef
 $(eval $(call Download,linux-firmware))
 
@@ -199,17 +199,28 @@ else
 endif
 
 
-define FastCloneKernel
+ifneq ($(call qstrip,$(_LINUX_SRC)),)
+# --reference option doesn't work on git trees synced with "repo", so instead
+# we're manually using clone & fetch to speed up sync time
+  define FastCloneKernel
+	git clone $(_LINUX_SRC) $(2) || \
+	(rm -rf $(2) && \
+	git clone $(_LINUX_SRC) $(2))
+	(cd $(2); git remote add src $(1); git fetch src)
+  endef
+else
+  define FastCloneKernel
 	GIT_NAME=$$$$(echo $(1) | sed -e 's:.*//[^/]*.::g'); \
 	git clone $(1) $(2) || \
 	([ -n "${CONFIG_GIT_MIRROR}" ] && \
 	rm -rf $(2) && \
 	git clone $(CONFIG_GIT_MIRROR)$$$$GIT_NAME $(2))
-endef
+  endef
+endif
 
-removeBackport ?= $(shell wget $(SERVER_PATH)/$(PKG_SOURCE) -P $(TOPDIR)/dl/);
+getLocalBackport ?= $(shell wget $(SERVER_PATH)/$(PKG_SOURCE) -P $(TOPDIR)/dl/);
 ifeq ($(FORCED_BACKPORTS),false)
-$(call removeBackport)
+$(if $(wildcard $(DL_DIR)/$(PKG_SOURCE)),,$(call getLocalBackport))
 endif
 
 define DownloadBackports
@@ -225,21 +236,20 @@ define DownloadBackports
 	mkdir -p $(TMP_DIR)/dl/$(PKG_NAME)-$(PKG_VERSION)
 	$(call FastCloneKernel,$(PKG_KERNEL_SOURCE_URL),$(TMP_DIR)/dl/$(PKG_NAME)-kernel)
 	(cd $(TMP_DIR)/dl/$(PKG_NAME)-kernel && git checkout $(PKG_KERNEL_VERSION) && \
-	git revert --no-edit db3bdcb9 && git revert --no-edit 0628cda3 && \
-	git revert --no-edit c8ffcd && git cherry-pick 2d9b55508 && git revert --no-edit 48a54f6bc && git revert --no-edit c5d1686b \
-	&& git revert --no-edit c08279a9 && git revert --no-edit f91a35b4)
+	git revert --no-edit db3bdcb9 && \
+	git revert --no-edit c8ffcd122 && git revert --no-edit 48a54f6bc && \
+	git revert --no-edit b55379e34 && git revert --no-edit e908435e4 && \
+	git revert --no-edit 36b0cefe9)
 
 	git clone $(PKG_BACKPORTS_SOURCE_URL) $(TMP_DIR)/dl/$(PKG_NAME)-source || \
 	(rm -rf $(TMP_DIR)/dl/$(PKG_NAME)-source && \
 	git clone $(PKG_BACKPORTS_SOURCE_URL) $(TMP_DIR)/dl/$(PKG_NAME)-source)
 	cp files/copy-list.ath $(TMP_DIR)/dl/$(PKG_NAME)-source
-	cd $(TMP_DIR)/dl/$(PKG_NAME)-source; \
-	git checkout $(PKG_BACKPORTS_VERSION); \
-	git revert --no-edit b35b2767; \
+	(cd $(TMP_DIR)/dl/$(PKG_NAME)-source && git checkout $(PKG_BACKPORTS_VERSION) && \
+	git revert --no-edit b35b2767 && \
 	./gentree.py --clean --copy-list ./copy-list.ath \
-		$(TMP_DIR)/dl/$(PKG_NAME)-kernel $(TMP_DIR)/dl/$(SUBDIR)
-	(cd $(TMP_DIR)/dl ; if [ -z "$(call dl_tar_pack,$(TMP_DIR)/dl/$(FILE),$(SUBDIR))" ]; then $(call dl_pack,$(TMP_DIR)/dl/$(FILE),$(SUBDIR)); else : ; fi; \
-	$(call dl_tar_pack,$(TMP_DIR)/dl/$(FILE),$(SUBDIR)) )
+		$(TMP_DIR)/dl/$(PKG_NAME)-kernel $(TMP_DIR)/dl/$(SUBDIR))
+	(cd $(TMP_DIR)/dl; $(call dl_pack,$(TMP_DIR)/dl/$(FILE),$(SUBDIR)))
 	mv $(TMP_DIR)/dl/$(FILE) $(DL_DIR)
 	rm -rf $(TMP_DIR)/dl
 endef
@@ -248,7 +258,7 @@ define Download/backports
   FILE:=$(PKG_SOURCE)
   SUBDIR:=$(PKG_SUBDIR)
 endef
-$(eval $(call DownloadBackports,backports))
+$(if $(wildcard $(DL_DIR)/$(PKG_SOURCE)),,$(eval $(call DownloadBackports,backports)))
 
 define KernelPackage/ath/config
   if PACKAGE_kmod-ath
@@ -446,21 +456,18 @@ config-$(CONFIG_PACKAGE_WIL6210_NSS_SUPPORT) += WIL6210_NSS_SUPPORT
 config-$(CONFIG_PACKAGE_kmod-ath9k) += ATH9K_CHANNEL_CONTEXT
 config-$(CONFIG_PACKAGE_kmod-ath10k) += ATH10K_DFS_CERTIFIED ATH10K_SMART_ANT_ALG \
 					ATH10K_AHB ATH10K_SPECTRAL
-config-$(CONFIG_PACKAGE_kmod-ath11k) += ATH11K_SPECTRAL
+config-$(CONFIG_PACKAGE_kmod-ath11k) += ATH11K_SPECTRAL ATH11K_CFR
 
 ifeq ($(CONFIG_KERNEL_IPQ_MEM_PROFILE),512)
 config-y += ATH11K_MEM_PROFILE_512M
 endif
-
-config-$(CONFIG_TARGET_ipq_ipq50xx) += ATH11K_MEM_PROFILE_512M
-config-$(CONFIG_TARGET_ipq_ipq50xx_64) += ATH11K_MEM_PROFILE_512M
 
 config-$(CONFIG_LEDS_TRIGGERS) += MAC80211_LEDS
 
 MAKE_OPTS:= -C "$(PKG_BUILD_DIR)" \
 	CROSS_COMPILE="$(KERNEL_CROSS)" \
 	ARCH="$(LINUX_KARCH)" \
-	EXTRA_CFLAGS="-I$(PKG_BUILD_DIR)/include -I$(STAGING_DIR)/usr/include/qca-nss-drv -Wall -Werror -Wno-incompatible-pointer-types -Wno-discarded-qualifiers -Wno-int-conversion" \
+	EXTRA_CFLAGS="-I$(PKG_BUILD_DIR)/include -I$(STAGING_DIR)/usr/include/qca-nss-drv -I$(STAGING_DIR)/usr/include/qca-nss-clients -Wall -Werror -Wno-incompatible-pointer-types -Wno-discarded-qualifiers -Wno-int-conversion" \
 	KLIB_BUILD="$(LINUX_DIR)" \
 	MODPROBE=true \
 	KLIB=$(TARGET_MODULES_DIR) \
@@ -510,6 +517,10 @@ ifneq ($(CONFIG_PACKAGE_kmod-cfg80211)$(CONFIG_PACKAGE_kmod-lib80211),)
  endef
 endif
 
+define Build/Configure
+	cmp $(PKG_BUILD_DIR)/include/linux/ath9k_platform.h $(LINUX_DIR)/include/linux/ath9k_platform.h
+endef
+
 define Build/Compile
 	$(SH_FUNC) var2file "$(call shvar,mac80211_config)" $(PKG_BUILD_DIR)/.config
 	$(MAKE) $(MAKE_OPTS) olddefconfig
@@ -537,10 +548,11 @@ define KernelPackage/cfg80211/install
 	$(INSTALL_DIR) $(1)/lib/wifi $(1)/etc/hotplug.d/devcoredump
 	$(INSTALL_DIR) $(1)/lib/wifi $(1)/lib/netifd/wireless
 	$(INSTALL_DATA) ./files/lib/wifi/mac80211.sh $(1)/lib/wifi
-	$(INSTALL_DATA) ./files/lib/netifd/mac80211.sh $(1)/lib/netifd
 	$(INSTALL_BIN) ./files/lib/netifd/wireless/mac80211.sh $(1)/lib/netifd/wireless
 	$(INSTALL_BIN) ./files/lib/performance.sh $(1)/lib
 	$(INSTALL_BIN) ./files/lib/smp_affinity_settings.sh $(1)/lib
+	$(INSTALL_BIN) ./files/lib/boost_performance.sh $(1)/lib
+	$(INSTALL_BIN) ./files/lib/apsta_mode.sh $(1)/lib
 	$(INSTALL_BIN) ./files/ath11k-coredump.sh $(1)/etc/hotplug.d/devcoredump
 endef
 
@@ -561,6 +573,9 @@ define KernelPackage/ath10k/install
 endef
 
 define KernelPackage/ath11k/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/ath11k_nss_enable.sh $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/qca-nss-pbuf $(1)/etc/init.d
 endef
 
 $(eval $(call KernelPackage,cfg80211))
